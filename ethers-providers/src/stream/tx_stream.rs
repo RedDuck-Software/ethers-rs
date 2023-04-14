@@ -12,7 +12,7 @@ use futures_util::{
 };
 
 use ethers_core::types::{Transaction, TxHash};
-use ethers_core::rand;
+use ethers_core::rand::{thread_rng, Rng};
 use tokio::time::Instant;
 
 use crate::{
@@ -80,17 +80,8 @@ impl<'a, P: JsonRpcClient, St> TransactionStream<'a, P, St> {
     }
 
     /// Create a new `TransactionStream` instance
-    pub fn new_with_params(provider: &'a Provider<P>, stream: St, max_concurrent: usize, scan_tx_fraction: i32, drop_after_ms: u32) -> Self {
-        assert!(scan_tx_fraction > 0, "scan_tx_fraction must be > 0");
-        assert!(scan_tx_fraction <= 1000, "scan_tx_fraction must be <= 1000");
-        
-        const SCAN_TX_FRACTION_STEP: u32 = 4294967; // 2^32 / 1000
-        let scan_tx_fraction = if scan_tx_fraction == 1000 {
-            u32::MAX
-        } else {
-            SCAN_TX_FRACTION_STEP * scan_tx_fraction as u32
-        };
-
+    pub fn new_with_params(provider: &'a Provider<P>, stream: St, max_concurrent: usize, scan_tx_fraction: u32, drop_after_ms: u32) -> Self {
+        assert!(scan_tx_fraction > 0 && scan_tx_fraction <= 1000, "scan_tx_fraction must be > 0 and <= 1000");
 
         Self {
             pending: Default::default(),
@@ -106,17 +97,8 @@ impl<'a, P: JsonRpcClient, St> TransactionStream<'a, P, St> {
 
     /// Push a future into the set
     pub(crate) fn push_tx(&mut self, tx: TxHash) {
-        {
-            let hash_ptr = tx.0.as_ptr();
-            let hash_ptr_u32 = hash_ptr as * const u32;
-            
-            #[allow(unsafe_code)]
-            let first_4_bytes_of_hash_as_u32 = unsafe { *hash_ptr_u32 };
-            
-            // treat first 4 bytes as a random number
-            if first_4_bytes_of_hash_as_u32 < self.scan_tx_fraction {
-                return;
-            }
+        if thread_rng().gen_range(0..=1000) > self.scan_tx_fraction {
+            return;
         }
 
         let fut = self.provider.get_transaction(tx).then(move |res| match res {
@@ -206,7 +188,7 @@ where
     /// This internally calls `Provider::get_transaction` with every new transaction.
     /// No more than n futures will be buffered at any point in time, and less than n may also be
     /// buffered depending on the state of each future.
-    pub fn transactions_unordered_override(self, n: usize, scan_tx_fraction: i32, drop_after_ms: u32) -> TransactionStream<'a, P, Self> {
+    pub fn transactions_unordered_override(self, n: usize, scan_tx_fraction: u32, drop_after_ms: u32) -> TransactionStream<'a, P, Self> {
         TransactionStream::new_with_params(self.provider, self, n, scan_tx_fraction, drop_after_ms)
     }
 }
@@ -231,7 +213,7 @@ where
     /// This internally calls `Provider::get_transaction` with every new transaction.
     /// No more than n futures will be buffered at any point in time, and less than n may also be
     /// buffered depending on the state of each future.
-    pub fn transactions_unordered_override(self, n: usize, scan_tx_fraction: i32, drop_after_ms: u32) -> TransactionStream<'a, P, Self> {
+    pub fn transactions_unordered_override(self, n: usize, scan_tx_fraction: u32, drop_after_ms: u32) -> TransactionStream<'a, P, Self> {
         TransactionStream::new_with_params(self.provider, self, n, scan_tx_fraction, drop_after_ms)
     }
 }
