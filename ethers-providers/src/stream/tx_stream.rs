@@ -96,13 +96,19 @@ impl<'a, P: JsonRpcClient, St> TransactionStream<'a, P, St> {
     }
 
     /// Push a future into the set
-    pub(crate) fn push_tx(&mut self, tx: TxHash) {
+    pub(crate) fn push_tx_lol(&mut self, tx_entry: TxHashEntry) {
         if thread_rng().gen_range(0..=1000) > self.scan_tx_fraction {
             return;
         }
 
+        let tx = tx_entry.hash;
+        let when_seen = tx_entry.when_seen;
         let fut = self.provider.get_transaction(tx).then(move |res| match res {
-            Ok(Some(tx)) => futures_util::future::ok(tx),
+            Ok(Some(mut tx)) => {
+                let time_processing = Instant::now().duration_since(when_seen);
+                tx.other.insert("transactionStreamDelayMillis".to_string(), time_processing.as_millis().into());
+                futures_util::future::ok(tx)
+            },
             Ok(None) => futures_util::future::err(GetTransactionError::NotFound(tx)),
             Err(err) => futures_util::future::err(GetTransactionError::ProviderError(tx, err)),
         });
@@ -128,7 +134,7 @@ where
                     continue;
                 }
 
-                this.push_tx(tx.hash);
+                this.push_tx_lol(tx);
             } else {
                 break;
             }
@@ -138,10 +144,10 @@ where
             loop {
                 match Stream::poll_next(Pin::new(&mut this.stream), cx) {
                     Poll::Ready(Some(tx)) => {
+                        let entry = TxHashEntry { hash: tx, when_seen: Instant::now() };
                         if this.pending.len() < this.max_concurrent {
-                            this.push_tx(tx);
+                            this.push_tx_lol(entry);
                         } else {
-                            let entry = TxHashEntry { hash: tx, when_seen: Instant::now() };
                             this.buffered.push_back(entry);
                         }
                     }
